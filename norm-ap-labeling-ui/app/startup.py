@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from itertools import zip_longest
 
 import streamlit as st
 
@@ -78,9 +79,19 @@ def run_startup(app_mode: str) -> None:
             norm_sensors = {p: sensors[p] for p in props_for_norm if p in sensors}
             sim_labels: dict[str, list[dict[str, bool]]] = {}
             for trace in trace_list:
-                sim_id = trace.get("simulation", {}).get("id", "")
-                messages = trace.get("simulation", {}).get("messages", [])
-                sim_labels[sim_id] = compute_auto_labels(messages, norm_sensors)
+                sim = trace.get("simulation", {})
+                sim_id = sim.get("id", "")
+                ap_trace = sim.get("ap_trace")
+                computed = compute_auto_labels(sim.get("messages", []), norm_sensors)
+                if ap_trace is not None:
+                    # Merge: computed tool_call labels fill in props absent from ap_trace;
+                    # ap_trace wins for any key it explicitly sets (observation props).
+                    sim_labels[sim_id] = [
+                        {**tl, **al}
+                        for al, tl in zip_longest(ap_trace, computed, fillvalue={})
+                    ]
+                else:
+                    sim_labels[sim_id] = computed
             norm_auto_labels[norm_id] = sim_labels
 
     # Auto-save norms where every prop is tool_call (no human review needed).
