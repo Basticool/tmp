@@ -12,6 +12,7 @@ import streamlit as st
 
 from app.config import JOBS_DIR, USERS_FILE
 from app.modules.job_manager import (
+    claim_bundle,
     create_bundle,
     create_job,
     delete_bundle,
@@ -219,7 +220,39 @@ def render() -> None:
                         st.write(f"**Claimed by:** {claimed_by} at {bundle.get('claimed_at', '?')[:10]}")
                         st.write(f"**Job:** `{bundle.get('job_id', '?')}`")
                     else:
-                        if st.button(f"Delete bundle {bid}", key=f"del_bundle_{bid}"):
-                            delete_bundle(bid, JOBS_DIR)
-                            st.warning(f"Deleted bundle `{bid}`.")
-                            st.rerun()
+                        orig = bundle.get("original_labeler")
+                        eligible = bundle.get("eligible_labelers")
+                        if orig:
+                            st.write(f"**Original labeler:** {orig}")
+                        if eligible:
+                            st.write(f"**Eligible labelers:** {', '.join(eligible)}")
+
+                        non_admin_users = [u for u in _load_users() if u != "admin"]
+                        assignable = eligible if eligible else non_admin_users
+                        if assignable:
+                            col_sel, col_btn, col_del = st.columns([2, 2, 1])
+                            with col_sel:
+                                sel_user = st.selectbox(
+                                    "Assign to",
+                                    assignable,
+                                    key=f"assign_sel_{bid}",
+                                    label_visibility="collapsed",
+                                )
+                            with col_btn:
+                                if st.button(f"Assign to {sel_user}", key=f"assign_{bid}", type="primary"):
+                                    try:
+                                        claim_bundle(bid, sel_user, norm_traces, JOBS_DIR)
+                                        st.success(f"Bundle `{name}` assigned to **{sel_user}**.")
+                                        st.rerun()
+                                    except ValueError as exc:
+                                        st.error(str(exc))
+                            with col_del:
+                                if st.button("Delete", key=f"del_bundle_{bid}"):
+                                    delete_bundle(bid, JOBS_DIR)
+                                    st.warning(f"Deleted bundle `{bid}`.")
+                                    st.rerun()
+                        else:
+                            if st.button(f"Delete bundle {bid}", key=f"del_bundle_{bid}"):
+                                delete_bundle(bid, JOBS_DIR)
+                                st.warning(f"Deleted bundle `{bid}`.")
+                                st.rerun()

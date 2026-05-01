@@ -21,6 +21,7 @@ from app.modules.job_manager import (
     cleanup_empty_and_completed_jobs,
     get_completed_sim_ids_job,
     get_completed_sim_ids_simple,
+    get_job_sim_ids_filter_for_norm,
     get_job_units,
     get_user_jobs,
     is_norm_complete_job,
@@ -261,6 +262,12 @@ def render() -> None:
 
     norm_id: str = selected_norm  # type: ignore[assignment]
     traces = norm_traces.get(norm_id, [])
+    # For overlap jobs, restrict to the specific traces assigned to this user
+    if app_mode == "multi_user":
+        _sim_filter = get_job_sim_ids_filter_for_norm(ss.get("username", ""), norm_id, JOBS_DIR)
+        if _sim_filter is not None:
+            _filter_set = set(_sim_filter)
+            traces = [t for t in traces if t.get("simulation", {}).get("id", "") in _filter_set]
     n_total = len(traces)
     props: list[str] = norm_props.get(norm_id, [])
 

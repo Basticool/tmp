@@ -26,22 +26,29 @@ def create_job(
     norm_ids: list[str],
     norm_traces: dict[str, list[dict]],
     jobs_dir: Path,
+    sim_ids_filter: "dict[str, list[str]] | None" = None,
 ) -> str:
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     ensure_dir(jobs_dir)
 
-    append_jsonl(jobs_dir / "manifest.jsonl", {
+    manifest_entry: dict = {
         "job_id": job_id,
         "username": username,
         "norm_ids": norm_ids,
         "created_at": now_iso(),
         "status": "pending",
-    })
+    }
+    if sim_ids_filter:
+        manifest_entry["sim_ids_filter"] = sim_ids_filter
+    append_jsonl(jobs_dir / "manifest.jsonl", manifest_entry)
 
     units = []
     for norm_id in norm_ids:
+        allowed = set(sim_ids_filter[norm_id]) if sim_ids_filter and norm_id in sim_ids_filter else None
         for trace in norm_traces.get(norm_id, []):
             sim_id = trace.get("simulation", {}).get("id", "")
+            if allowed is not None and sim_id not in allowed:
+                continue
             units.append({
                 "sim_id": sim_id,
                 "norm_id": norm_id,
@@ -202,10 +209,16 @@ def create_bundle(
     norm_ids: list[str],
     norm_traces: dict[str, list[dict]],
     jobs_dir: Path,
+    sim_ids_filter: "dict[str, list[str]] | None" = None,
+    eligible_labelers: "list[str] | None" = None,
+    original_labeler: "str | None" = None,
 ) -> str:
     bundle_id = f"bundle_{uuid.uuid4().hex[:8]}"
-    n_traces = sum(len(norm_traces.get(n, [])) for n in norm_ids)
-    append_jsonl(jobs_dir / _BUNDLES_FILE, {
+    if sim_ids_filter:
+        n_traces = sum(len(v) for v in sim_ids_filter.values())
+    else:
+        n_traces = sum(len(norm_traces.get(n, [])) for n in norm_ids)
+    entry: dict = {
         "bundle_id": bundle_id,
         "name": name,
         "norm_ids": norm_ids,
@@ -214,7 +227,14 @@ def create_bundle(
         "claimed_by": None,
         "claimed_at": None,
         "job_id": None,
-    })
+    }
+    if sim_ids_filter:
+        entry["sim_ids_filter"] = sim_ids_filter
+    if eligible_labelers is not None:
+        entry["eligible_labelers"] = eligible_labelers
+    if original_labeler is not None:
+        entry["original_labeler"] = original_labeler
+    append_jsonl(jobs_dir / _BUNDLES_FILE, entry)
     return bundle_id
 
 
@@ -238,7 +258,9 @@ def claim_bundle(
         if bundle["bundle_id"] == bundle_id:
             if bundle.get("claimed_by"):
                 raise ValueError(f"Bundle already claimed by {bundle['claimed_by']}")
-            job_id = create_job(username, bundle["norm_ids"], norm_traces, jobs_dir)
+            sim_ids_filter = bundle.get("sim_ids_filter") or None
+            job_id = create_job(username, bundle["norm_ids"], norm_traces, jobs_dir,
+                                sim_ids_filter=sim_ids_filter)
             bundle["claimed_by"] = username
             bundle["claimed_at"] = now_iso()
             bundle["job_id"] = job_id
@@ -247,6 +269,15 @@ def claim_bundle(
         raise ValueError(f"Bundle {bundle_id} not found")
     write_jsonl(jobs_dir / _BUNDLES_FILE, bundles)
     return job_id
+
+
+def get_job_sim_ids_filter_for_norm(username: str, norm_id: str, jobs_dir: Path) -> "list[str] | None":
+    """Return the sim_ids filter list for a user's job containing norm_id, or None if no filter."""
+    for job in get_user_jobs(username, jobs_dir):
+        if norm_id in job.get("norm_ids", []):
+            sim_filter = job.get("sim_ids_filter", {})
+            return sim_filter.get(norm_id)
+    return None
 
 
 def delete_bundle(bundle_id: str, jobs_dir: Path) -> None:
