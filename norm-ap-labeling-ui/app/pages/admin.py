@@ -5,6 +5,7 @@ Tabs
 Users       : add / remove labeler accounts.
 Allocate    : assign norms to users (creates a job per assignment).
 Jobs        : view all jobs, inspect progress, delete jobs.
+Bundles     : create/assign bundles, including overlap bundles for IAA study.
 """
 from __future__ import annotations
 
@@ -24,6 +25,72 @@ from app.modules.job_manager import (
     update_job_status,
 )
 from app.modules.storage import append_jsonl, now_iso, read_jsonl, write_jsonl
+
+# ── Overlap bundle plan ────────────────────────────────────────────────────────
+# (name, norm_id, n_take, original_labeler)
+# sim_ids are resolved at creation time from the live norm_traces dict.
+_OVERLAP_PLAN = [
+    ("overlap-01  N0-cancel",            "N0-cancel",            12, "Louise"),
+    ("overlap-02  N0-exchange",           "N0-exchange",          12, "Louise"),
+    ("overlap-03  N0-return",             "N0-return",            12, "Louise"),
+    ("overlap-04  N0-modify-order-items", "N0-modify-order-items",12, "Louise"),
+    ("overlap-05  N1-cancel",             "N1-cancel",            12, "Louise"),
+    ("overlap-06  N3-return",             "N3-return",            12, "leif"),
+    ("overlap-07  N2-cancel",             "N2-cancel",            12, "Bastien"),
+    ("overlap-08  glm_cancel",            "glm_cancel",           12, "Bastien"),
+    ("overlap-09  glm_cancel+return",     "glm_cancel+return",    12, "leif"),
+    ("overlap-10  glm_mod_user_addr",     "glm_mod_user_addr",    12, "Anuj"),
+]
+
+# Users never assigned (regardless of eligibility)
+_OVERLAP_EXCLUDE = {"Louise", "batch1", "batch5", "admin"}
+
+# Same physical person — treated as one for eligibility purposes
+_SAME_PERSON: list[tuple[str, frozenset[str]]] = [
+    ("Bastien", frozenset({"Bastien", "bastien", "Basti"})),
+]
+_CANONICAL  = {a: c for c, aliases in _SAME_PERSON for a in aliases}
+_ALIAS_GROUP = {a: aliases for c, aliases in _SAME_PERSON for a in aliases}
+
+
+def _sim_labeler_from_jobs() -> dict[str, str]:
+    """Build {sim_id: labeled_by} from all completed non-v8 job units."""
+    result: dict[str, str] = {}
+    for job in get_all_jobs(JOBS_DIR):
+        for unit in get_job_units(job["job_id"], JOBS_DIR):
+            sid = unit.get("sim_id", "")
+            if (
+                unit.get("unit_status") == "completed"
+                and unit.get("labeled_by")
+                and not sid.startswith("v8e_")
+            ):
+                result[sid] = unit["labeled_by"]
+    return result
+
+
+def _compute_overlap_eligible(
+    sim_ids: list[str],
+    original_labeler: str,
+    all_users: list[str],
+    sim_labeler: dict[str, str],
+) -> list[str]:
+    """Return canonical eligible usernames for an overlap bundle."""
+    sim_set = set(sim_ids)
+    orig_aliases = _ALIAS_GROUP.get(original_labeler, frozenset({original_labeler}))
+    excluded = _OVERLAP_EXCLUDE | orig_aliases
+    seen: set[str] = set()
+    eligible: list[str] = []
+    for user in sorted(all_users):
+        if user in excluded:
+            continue
+        person_aliases = _ALIAS_GROUP.get(user, frozenset({user}))
+        if any(sim_labeler.get(s) in person_aliases for s in sim_set):
+            continue
+        canon = _CANONICAL.get(user, user)
+        if canon not in seen:
+            seen.add(canon)
+            eligible.append(canon)
+    return eligible
 
 
 # ── User helpers ───────────────────────────────────────────────────────────────
@@ -180,7 +247,7 @@ def render() -> None:
         norms_with_obs: set = st.session_state.get("norms_with_obs", set())
         allocatable_norms = sorted(n for n in norm_traces if n in norms_with_obs)
 
-        with st.expander("Create new bundle", expanded=True):
+        with st.expander("Create new bundle", expanded=False):
             bundle_name = st.text_input("Bundle name (optional label for the admin)", key="bundle_name")
             bundle_norms = st.multiselect(
                 "Norms to include",
@@ -199,6 +266,51 @@ def render() -> None:
                 )
                 st.success(f"Bundle `{bid}` created.")
                 st.rerun()
+
+        with st.expander("Create overlap bundles (inter-annotator agreement study)", expanded=True):
+            st.caption(
+                "Creates 10 bundles of 12 traces each, sampling from already human-labeled "
+                "non-v8 norms. Each bundle shows eligible labelers (those who haven't labeled "
+                "those traces before and are not Louise). Bastien / bastien / Basti are treated "
+                "as one person."
+            )
+            existing_bundle_names = {b["name"] for b in get_all_bundles(JOBS_DIR)}
+            pending = [p for p in _OVERLAP_PLAN if p[0] not in existing_bundle_names]
+
+            if not pending:
+                st.success("All 10 overlap bundles already exist. Assign them below.")
+            else:
+                st.write(f"**{len(pending)}** of 10 bundles not yet created:")
+                for name, norm_id, n_take, orig in pending:
+                    available = len(norm_traces.get(norm_id, []))
+                    st.caption(f"  • {name}  ({norm_id}, {min(n_take, available)} traces, original: {orig})")
+
+                if st.button("Create all missing overlap bundles", key="create_overlap", type="primary"):
+                    all_users = _load_users()
+                    sim_labeler = _sim_labeler_from_jobs()
+                    created = 0
+                    for name, norm_id, n_take, original_labeler in pending:
+                        traces_for_norm = norm_traces.get(norm_id, [])
+                        sim_ids = sorted(
+                            t.get("simulation", {}).get("id", "")
+                            for t in traces_for_norm
+                            if not t.get("simulation", {}).get("id", "").startswith("v8e_")
+                        )[:n_take]
+                        eligible = _compute_overlap_eligible(
+                            sim_ids, original_labeler, all_users, sim_labeler
+                        )
+                        create_bundle(
+                            name,
+                            [norm_id],
+                            norm_traces,
+                            JOBS_DIR,
+                            sim_ids_filter={norm_id: sim_ids},
+                            eligible_labelers=eligible,
+                            original_labeler=original_labeler,
+                        )
+                        created += 1
+                    st.success(f"Created {created} overlap bundle(s).")
+                    st.rerun()
 
         st.divider()
         all_bundles = get_all_bundles(JOBS_DIR)
