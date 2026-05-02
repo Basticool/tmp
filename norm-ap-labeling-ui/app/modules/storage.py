@@ -156,5 +156,14 @@ def write_jsonl(path: str | Path, records: list[dict]) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def clear_cache() -> None:
+    """Evict all in-process GitHub content cache entries.
+
+    Call this after an external git push so the app re-fetches fresh content
+    from the GitHub API instead of serving stale cached state.
+    """
+    _cache.clear()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

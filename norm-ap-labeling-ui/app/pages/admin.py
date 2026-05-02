@@ -24,7 +24,7 @@ from app.modules.job_manager import (
     get_job_units,
     update_job_status,
 )
-from app.modules.storage import append_jsonl, now_iso, read_jsonl, write_jsonl
+from app.modules.storage import append_jsonl, clear_cache, now_iso, read_jsonl, write_jsonl
 
 # ── Overlap bundle plan ────────────────────────────────────────────────────────
 # (name, norm_id, n_take, original_labeler)
@@ -242,6 +242,10 @@ def render() -> None:
             "Bundles are pools of norms that any user can claim on login. "
             "Once claimed, the bundle is locked to that user and a job is created automatically."
         )
+
+        if st.button("↺ Refresh from GitHub", key="refresh_bundles", help="Clear the in-process cache and reload all data from GitHub. Use this after an external git push."):
+            clear_cache()
+            st.rerun()
 
         norm_traces: dict = st.session_state["norm_traces"]
         norms_with_obs: set = st.session_state.get("norms_with_obs", set())
