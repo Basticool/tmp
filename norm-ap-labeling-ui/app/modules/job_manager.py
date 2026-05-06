@@ -118,6 +118,17 @@ def delete_job(job_id: str, jobs_dir: Path) -> None:
     labels_path = jobs_dir / f"{job_id}_labels.jsonl"
     if labels_path.exists():
         labels_path.unlink()
+    # Unclaim any bundle that was linked to this job
+    bundles_path = jobs_dir / _BUNDLES_FILE
+    bundles = read_jsonl(bundles_path)
+    changed = any(b.get("job_id") == job_id for b in bundles)
+    if changed:
+        for b in bundles:
+            if b.get("job_id") == job_id:
+                b["claimed_by"] = None
+                b["claimed_at"] = None
+                b["job_id"] = None
+        write_jsonl(bundles_path, bundles)
 
 
 def update_job_status(job_id: str, jobs_dir: Path) -> None:

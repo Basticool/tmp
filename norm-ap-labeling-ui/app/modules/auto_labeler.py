@@ -100,15 +100,14 @@ def _labeler_multiple_tool_calls(message: dict, _ctx: dict) -> bool:
 
 
 def _labeler_text_with_tool_call(message: dict, _ctx: dict) -> bool:
-    """True when an assistant turn has both substantive text and at least one tool call."""
+    """True when an assistant turn has  and at least one tool call."""
     if message.get("role") != "assistant":
         return False
     tcs = message.get("tool_calls") or []
     if not any(isinstance(tc, dict) for tc in tcs):
         return False
     content = (message.get("content") or "").strip()
-    # Require non-trivial text: more than a brief filler phrase
-    return len(content) > 20
+    return len(content) > 0
 
 
 def _labeler_cancel_invalid_reason(message: dict, _ctx: dict) -> bool:
